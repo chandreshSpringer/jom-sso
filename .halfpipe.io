@@ -21,12 +21,3 @@ tasks:
   manual_trigger: false
   manifest: manifest-files/manifest-dev.yml
   deploy_artifact: ./dist
-
-
-- type: deploy-cf
-  name: deploy-live
-  api: ((cloudfoundry.api-snpaas))
-  space: jom
-  manual_trigger: true
-  manifest: manifest-files/manifest-live.yml
-  deploy_artifact: ./dist

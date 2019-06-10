@@ -1,9 +1,0 @@
----
-applications:
-  - name: journal-opportunity-management-ui
-    memory: 750M
-    instances: 2
-    buildpacks:
-      - staticfile_buildpack
-    routes:
-      - route: journal-opportunity-management-ui-live.springernature.app
