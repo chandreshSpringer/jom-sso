@@ -1,10 +1,10 @@
 ---
 applications:
-  - name: journal-opportunity-management-ui
+  - name: jom-sso
     memory: 500M
     instances: 1
     start:
     buildpacks:
       - staticfile_buildpack
     routes:
-      - route: journal-opportunity-management-ui-dev.springernature.app
+      - route: jom-sso.springernature.app
