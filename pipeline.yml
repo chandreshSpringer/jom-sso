@@ -1,0 +1,293 @@
+# Generated using halfpipe cli version 3.4.6
+groups: []
+resources:
+- name: git
+  type: git
+  source:
+    branch: master
+    private_key: ((halfpipe-github.private_key))
+    uri: git@github.com:chandreshSpringer/jom-sso.git
+- name: slack-notification
+  type: slack-notification
+  source:
+    url: https://hooks.slack.com/services/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
+- name: artifacts-production-jom-sso
+  type: gcp-resource
+  source:
+    bucket: ((halfpipe-artifacts.bucket))
+    folder: production/jom-sso
+    json_key: ((halfpipe-artifacts.private_key))
+- name: CF snpaas jom
+  type: cf-resource
+  source:
+    api: ((cloudfoundry.api-snpaas))
+    org: ((cloudfoundry.org-snpaas))
+    password: ((cloudfoundry.password-snpaas))
+    space: jom
+    username: ((cloudfoundry.username-snpaas))
+- name: CF snpaas jom (1)
+  type: cf-resource
+  source:
+    api: ((cloudfoundry.api-snpaas))
+    org: ((cloudfoundry.org-snpaas))
+    password: ((cloudfoundry.password-snpaas))
+    space: jom
+    username: ((cloudfoundry.username-snpaas))
+resource_types:
+- name: slack-notification
+  type: registry-image
+  source:
+    repository: cfcommunity/slack-notification-resource
+    tag: v1.4.2
+- name: gcp-resource
+  type: registry-image
+  source:
+    password: ((halfpipe-gcr.private_key))
+    repository: eu.gcr.io/halfpipe-io/gcp-resource
+    tag: stable
+    username: _json_key
+- name: cf-resource
+  type: registry-image
+  source:
+    password: ((halfpipe-gcr.private_key))
+    repository: eu.gcr.io/halfpipe-io/cf-resource
+    tag: stable
+    username: _json_key
+jobs:
+- name: build
+  serial: true
+  plan:
+  - aggregate:
+    - get: git
+      trigger: true
+    timeout: 1h
+  - task: build
+    config:
+      platform: linux
+      image_resource:
+        type: registry-image
+        source:
+          repository: nikolaik/python-nodejs
+          tag: latest
+      params:
+        ARTIFACTORY_PASSWORD: ((artifactory.password))
+        ARTIFACTORY_URL: ((artifactory.url))
+        ARTIFACTORY_USERNAME: ((artifactory.username))
+      run:
+        path: /bin/sh
+        args:
+        - -c
+        - |-
+          which bash > /dev/null
+          if [ $? != 0 ]; then
+            echo "WARNING: Bash is not present in the docker image"
+            echo "If your script depends on bash you will get a strange error message like:"
+            echo "  sh: yourscript.sh: command not found"
+            echo "To fix, make sure your docker image contains bash!"
+            echo ""
+            echo ""
+          fi
+
+          if [ -e /etc/alpine-release ]
+          then
+            echo "WARNING: you are running your build in a Alpine image or one that is based on the Alpine"
+            echo "There is a known issue where DNS resolving does not work as expected"
+            echo "https://github.com/gliderlabs/docker-alpine/issues/255"
+            echo "If you see any errors related to resolving hostnames the best course of action is to switch to another image"
+            echo "we recommend debian:stretch-slim as an alternative"
+            echo ""
+            echo ""
+          fi
+
+          copyArtifact() {
+            ARTIFACT=$1
+            ARTIFACT_OUT_PATH=$2
+            if [ -d $ARTIFACT ] ; then
+              mkdir -p $ARTIFACT_OUT_PATH/$ARTIFACT
+              cp -r $ARTIFACT/. $ARTIFACT_OUT_PATH/$ARTIFACT/
+            elif [ -f $ARTIFACT ] ; then
+              ARTIFACT_DIR=$(dirname $ARTIFACT)
+              mkdir -p $ARTIFACT_OUT_PATH/$ARTIFACT_DIR
+              cp $ARTIFACT $ARTIFACT_OUT_PATH/$ARTIFACT_DIR
+            else
+              echo "ERROR: Artifact '$ARTIFACT' not found. Try fly hijack to check the filesystem."
+              exit 1
+            fi
+          }
+
+          export GIT_REVISION=`cat .git/ref`
+
+          ./build.sh
+          EXIT_STATUS=$?
+          if [ $EXIT_STATUS != 0 ] ; then
+            exit 1
+          fi
+
+          # Artifacts to copy from task
+          copyArtifact . ../artifacts-out
+        dir: git
+      inputs:
+      - name: git
+      outputs:
+      - name: artifacts-out
+      caches:
+      - path: ../../../var/halfpipe/cache
+      - path: ../../../halfpipe-cache
+    timeout: 1h
+    attempts: 1
+  - put: artifacts
+    resource: artifacts-production-jom-sso
+    params:
+      folder: artifacts-out
+      version_file: git/.git/ref
+    timeout: 1h
+  on_failure:
+    aggregate:
+    - put: slack-notification
+      params:
+        channel: '#jom-frontend-builds'
+        icon_url: https://concourse.halfpipe.io/public/images/favicon-failed.png
+        text: The pipeline `$BUILD_PIPELINE_NAME` failed at `$BUILD_JOB_NAME`. <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME>
+        username: Halfpipe
+- name: deploy-dev
+  serial: true
+  plan:
+  - aggregate:
+    - get: git
+      passed:
+      - build
+      trigger: true
+    timeout: 1h
+  - task: get artifact
+    config:
+      platform: linux
+      image_resource:
+        type: registry-image
+        source:
+          password: ((halfpipe-gcr.private_key))
+          repository: eu.gcr.io/halfpipe-io/gcp-resource
+          tag: stable
+          username: _json_key
+      params:
+        BUCKET: ((halfpipe-artifacts.bucket))
+        FOLDER: production/jom-sso
+        JSON_KEY: ((halfpipe-artifacts.private_key))
+        VERSION_FILE: git/.git/ref
+      run:
+        path: /opt/resource/download
+        args:
+        - .
+        dir: artifacts
+      inputs:
+      - name: git
+      outputs:
+      - name: artifacts
+    timeout: 1h
+  - put: cf halfpipe-push
+    resource: CF snpaas jom
+    params:
+      appPath: artifacts/dist
+      command: halfpipe-push
+      gitRefPath: git/.git/ref
+      manifestPath: git/manifest-files/manifest-dev.yml
+      testDomain: springernature.app
+      timeout: 1h
+    timeout: 1h
+    attempts: 2
+  - put: cf halfpipe-promote
+    resource: CF snpaas jom
+    params:
+      command: halfpipe-promote
+      manifestPath: git/manifest-files/manifest-dev.yml
+      testDomain: springernature.app
+      timeout: 1h
+    timeout: 1h
+    attempts: 2
+  on_failure:
+    aggregate:
+    - put: slack-notification
+      params:
+        channel: '#jom-frontend-builds'
+        icon_url: https://concourse.halfpipe.io/public/images/favicon-failed.png
+        text: The pipeline `$BUILD_PIPELINE_NAME` failed at `$BUILD_JOB_NAME`. <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME>
+        username: Halfpipe
+  ensure:
+    put: cf halfpipe-cleanup
+    resource: CF snpaas jom
+    params:
+      command: halfpipe-cleanup
+      manifestPath: git/manifest-files/manifest-dev.yml
+      timeout: 1h
+    timeout: 1h
+    attempts: 2
+- name: deploy-live
+  serial: true
+  plan:
+  - aggregate:
+    - get: git
+      passed:
+      - deploy-dev
+    timeout: 1h
+  - task: get artifact
+    config:
+      platform: linux
+      image_resource:
+        type: registry-image
+        source:
+          password: ((halfpipe-gcr.private_key))
+          repository: eu.gcr.io/halfpipe-io/gcp-resource
+          tag: stable
+          username: _json_key
+      params:
+        BUCKET: ((halfpipe-artifacts.bucket))
+        FOLDER: production/jom-sso
+        JSON_KEY: ((halfpipe-artifacts.private_key))
+        VERSION_FILE: git/.git/ref
+      run:
+        path: /opt/resource/download
+        args:
+        - .
+        dir: artifacts
+      inputs:
+      - name: git
+      outputs:
+      - name: artifacts
+    timeout: 1h
+  - put: cf halfpipe-push
+    resource: CF snpaas jom (1)
+    params:
+      appPath: artifacts/dist
+      command: halfpipe-push
+      gitRefPath: git/.git/ref
+      manifestPath: git/manifest-files/manifest-live.yml
+      testDomain: springernature.app
+      timeout: 1h
+    timeout: 1h
+    attempts: 2
+  - put: cf halfpipe-promote
+    resource: CF snpaas jom (1)
+    params:
+      command: halfpipe-promote
+      manifestPath: git/manifest-files/manifest-live.yml
+      testDomain: springernature.app
+      timeout: 1h
+    timeout: 1h
+    attempts: 2
+  on_failure:
+    aggregate:
+    - put: slack-notification
+      params:
+        channel: '#jom-frontend-builds'
+        icon_url: https://concourse.halfpipe.io/public/images/favicon-failed.png
+        text: The pipeline `$BUILD_PIPELINE_NAME` failed at `$BUILD_JOB_NAME`. <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME>
+        username: Halfpipe
+  ensure:
+    put: cf halfpipe-cleanup
+    resource: CF snpaas jom (1)
+    params:
+      command: halfpipe-cleanup
+      manifestPath: git/manifest-files/manifest-live.yml
+      timeout: 1h
+    timeout: 1h
+    attempts: 2
+

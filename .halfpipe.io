@@ -1,5 +1,5 @@
 team: production
-pipeline: journal-opportunity-management-ui
+pipeline: jom-sso
 slack_channel: "#jom-frontend-builds"
 
 repo:
