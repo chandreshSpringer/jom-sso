@@ -1,0 +1,10 @@
+---
+applications:
+  - name: journal-opportunity-management-ui
+    memory: 500M
+    instances: 1
+    start:
+    buildpacks:
+      - staticfile_buildpack
+    routes:
+      - route: journal-opportunity-management-ui-dev.springernature.app
