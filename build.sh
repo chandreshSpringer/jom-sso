@@ -6,7 +6,7 @@ echo "Task 2 - Install vue cli"
 npm install -g vue-cli
 # echo "Task 3 - Install serve"
 # npm install -g serve
-echo "Task 4- Install node modules........."
+echo "Task 4- Install node modules.........."
 npm install
 echo "Task 5- Remove dist"
 rm -rf dist
